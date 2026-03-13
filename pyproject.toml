@@ -9,7 +9,7 @@ requires-python = ">=3.10"
 
 [project.optional-dependencies]
 publisher = ["websockets"]
-client = ["websockets", "alpaca-trade-api", "discord.py", "pyyaml", "python-dotenv"]
+client = ["websockets", "alpaca-trade-api", "pyyaml", "python-dotenv"]
 server = ["boto3"]
 dev = ["pytest", "pytest-asyncio", "moto[dynamodb]"]
 

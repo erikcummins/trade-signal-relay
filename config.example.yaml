@@ -17,5 +17,4 @@ eod:
   close_all_minutes: 10
 
 discord:
-  bot_token: "your-discord-bot-token"
-  channel_id: "your-discord-channel-id"
+  webhook_url: "https://discord.com/api/webhooks/your-webhook-url"

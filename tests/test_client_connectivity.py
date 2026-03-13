@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
-from relay_client.discord_bot import NoOpNotifier, create_notifier
+from relay_client.discord_bot import NoOpNotifier, WebhookNotifier, create_notifier
 from relay_client.client import RelayClient
 from shared.messages import AuthResult, Signal, serialize, deserialize
 
@@ -30,10 +30,34 @@ class TestNoOpNotifier:
 
     def test_create_notifier_with_empty_config(self):
         config = MagicMock()
-        config.bot_token = None
-        config.channel_id = None
+        config.webhook_url = None
         result = create_notifier(config)
         assert isinstance(result, NoOpNotifier)
+
+
+class TestWebhookNotifier:
+    def test_create_notifier_with_webhook(self):
+        config = MagicMock()
+        config.webhook_url = "https://discord.com/api/webhooks/123/abc"
+        result = create_notifier(config)
+        assert isinstance(result, WebhookNotifier)
+
+    @patch("relay_client.discord_bot.urllib.request.urlopen")
+    def test_send_message_posts_to_webhook(self, mock_urlopen):
+        notifier = WebhookNotifier("https://discord.com/api/webhooks/123/abc")
+        notifier.send_message("hello")
+
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://discord.com/api/webhooks/123/abc"
+        assert req.method == "POST"
+        import json
+        body = json.loads(req.data.decode())
+        assert body["content"] == "hello"
+
+    @patch("relay_client.discord_bot.urllib.request.urlopen", side_effect=Exception("fail"))
+    def test_send_message_swallows_errors(self, mock_urlopen):
+        notifier = WebhookNotifier("https://bad-url")
+        notifier.send_message("hello")
 
 
 class TestRelayClientAuth:

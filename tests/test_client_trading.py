@@ -22,7 +22,7 @@ VALID_CONFIG = {
     },
     "trading": {"position_size": 5000},
     "eod": {"stop_new_positions_minutes": 15, "close_all_minutes": 5},
-    "discord": {"bot_token": "token123", "channel_id": "chan456"},
+    "discord": {"webhook_url": "https://discord.com/api/webhooks/123/abc"},
 }
 
 
@@ -54,8 +54,7 @@ class TestConfigLoading:
             assert cfg.trading.position_size == 5000
             assert cfg.eod.stop_new_positions_minutes == 15
             assert cfg.eod.close_all_minutes == 5
-            assert cfg.discord.bot_token == "token123"
-            assert cfg.discord.channel_id == "chan456"
+            assert cfg.discord.webhook_url == "https://discord.com/api/webhooks/123/abc"
         finally:
             os.unlink(path)
 
@@ -73,8 +72,7 @@ class TestConfigLoading:
             assert cfg.trading.algo_sizes is None
             assert cfg.eod.stop_new_positions_minutes == 20
             assert cfg.eod.close_all_minutes == 10
-            assert cfg.discord.bot_token is None
-            assert cfg.discord.channel_id is None
+            assert cfg.discord.webhook_url is None
         finally:
             os.unlink(path)
 

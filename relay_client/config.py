@@ -34,8 +34,7 @@ class EodConfig:
 
 @dataclass
 class DiscordConfig:
-    bot_token: Optional[str] = None
-    channel_id: Optional[str] = None
+    webhook_url: Optional[str] = None
 
 
 @dataclass
@@ -87,8 +86,7 @@ def load_config(path: str) -> Config:
 
     discord_raw = raw.get("discord") or {}
     discord = DiscordConfig(
-        bot_token=discord_raw.get("bot_token"),
-        channel_id=discord_raw.get("channel_id"),
+        webhook_url=discord_raw.get("webhook_url"),
     )
 
     return Config(
