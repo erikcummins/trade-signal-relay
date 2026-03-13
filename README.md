@@ -3,9 +3,9 @@
 A WebSocket relay that routes trade signals from algorithmic trading strategies to subscribers, who auto-execute bracket orders on Alpaca.
 
 ```
-Algo → SignalPublisher → WebSocket → API Gateway → Lambda → DynamoDB
-                                                          → fan out to subscribers
-                                                          → RelayClient → AlpacaTrader → bracket order
+Algo → SignalPublisher → WebSocket → API Gateway
+→ Lambda → store in DynamoDB → fan out to subscribers
+→ RelayClient → AlpacaTrader → bracket order
 ```
 
 ## Packages
