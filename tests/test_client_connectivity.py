@@ -206,6 +206,7 @@ class TestMainLoop:
         mock_load.return_value = config
 
         pm = MagicMock()
+        pm.market_close_time = None
         call_count = 0
 
         def check_hours():
@@ -231,6 +232,51 @@ class TestMainLoop:
             main()
 
         mock_sleep.assert_called_with(5)
+
+    @patch("relay_client.__main__.time.sleep")
+    @patch("relay_client.__main__.RelayClient")
+    @patch("relay_client.__main__.create_notifier")
+    @patch("relay_client.__main__.PositionManager")
+    @patch("relay_client.__main__.tradeapi")
+    @patch("relay_client.__main__.AlpacaTrader")
+    @patch("relay_client.__main__.load_config")
+    def test_market_open_notifies_close_time(self, mock_load, mock_trader_cls,
+                                              mock_tradeapi, mock_pm_cls,
+                                              mock_notifier_fn, mock_client_cls,
+                                              mock_sleep):
+        from datetime import datetime
+
+        config = MagicMock()
+        config.alpaca.paper = True
+        mock_load.return_value = config
+
+        pm = MagicMock()
+        pm.market_close_time = datetime(2026, 3, 12, 16, 0, 0)
+        call_count = 0
+
+        def check_hours():
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise KeyboardInterrupt()
+            return True
+
+        pm.check_market_hours = MagicMock(side_effect=check_hours)
+        mock_pm_cls.return_value = pm
+
+        mock_notifier = MagicMock()
+        mock_notifier_fn.return_value = mock_notifier
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        from relay_client.__main__ import main
+
+        with patch("argparse.ArgumentParser.parse_args",
+                   return_value=MagicMock(config="test.yaml")):
+            main()
+
+        mock_notifier.send_message.assert_any_call("Market open (closes 04:00 PM)")
 
     @patch("relay_client.__main__.time.sleep")
     @patch("relay_client.__main__.RelayClient")

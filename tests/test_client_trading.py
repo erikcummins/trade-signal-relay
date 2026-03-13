@@ -225,6 +225,16 @@ class TestPositionManager:
         assert pm.accepting_new_positions is False
         assert pm.positions_closed_for_day is False
 
+    def test_stop_new_notifies(self):
+        api = MagicMock()
+        api.get_clock.return_value = self._make_clock(is_open=True, minutes_to_close=15)
+        notifier = MagicMock()
+        pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, notifier=notifier)
+
+        pm.check_market_hours()
+
+        notifier.send_message.assert_called_once_with("Stopping new positions (15min to close)")
+
     @patch("relay_client.position_manager.time.sleep")
     def test_close_all_at_threshold(self, mock_sleep):
         api = MagicMock()
@@ -238,6 +248,31 @@ class TestPositionManager:
         assert pm.positions_closed_for_day is True
         api.cancel_all_orders.assert_called_once()
         api.close_all_positions.assert_called_once()
+
+    @patch("relay_client.position_manager.time.sleep")
+    def test_close_all_notifies(self, mock_sleep):
+        api = MagicMock()
+        api.get_clock.return_value = self._make_clock(is_open=True, minutes_to_close=5)
+        api.list_positions.return_value = []
+        notifier = MagicMock()
+        pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, notifier=notifier)
+
+        pm.check_market_hours()
+
+        calls = [c[0][0] for c in notifier.send_message.call_args_list]
+        assert "Stopping new positions (5min to close)" in calls
+        assert "Closing all positions (5min to close)" in calls
+
+    def test_stop_new_notifies_only_once(self):
+        api = MagicMock()
+        api.get_clock.return_value = self._make_clock(is_open=True, minutes_to_close=15)
+        notifier = MagicMock()
+        pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, notifier=notifier)
+
+        pm.check_market_hours()
+        pm.check_market_hours()
+
+        assert notifier.send_message.call_count == 1
 
     @patch("relay_client.position_manager.time.sleep")
     def test_close_all_retry(self, mock_sleep):

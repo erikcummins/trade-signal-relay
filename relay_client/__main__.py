@@ -33,15 +33,16 @@ def main():
         position_size=config.trading.position_size,
     )
 
+    notifier = create_notifier(config.discord)
+
     base_url = "https://paper-api.alpaca.markets" if config.alpaca.paper else "https://api.alpaca.markets"
     api = tradeapi.REST(config.alpaca.api_key, config.alpaca.secret_key, base_url)
     position_manager = PositionManager(
         api,
         stop_new_minutes=config.eod.stop_new_positions_minutes,
         close_all_minutes=config.eod.close_all_minutes,
+        notifier=notifier,
     )
-
-    notifier = create_notifier(config.discord)
 
     def on_signal(signal):
         log.info("Signal received: %s %s %s", signal.action, signal.side, signal.ticker)
@@ -82,7 +83,11 @@ def main():
                 time.sleep(60)
             else:
                 if not market_was_open:
-                    log.info("Market open, monitoring signals")
+                    close_time = position_manager.market_close_time
+                    close_str = close_time.strftime("%I:%M %p") if close_time else ""
+                    msg = f"Market open (closes {close_str})"
+                    log.info(msg)
+                    notifier.send_message(msg)
                 market_was_open = True
                 time.sleep(5)
     except KeyboardInterrupt:
