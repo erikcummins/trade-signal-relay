@@ -1,1 +1,1 @@
-# -trade-signal-relay
+# trade-signal-relay
