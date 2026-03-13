@@ -9,6 +9,7 @@ __pycache__/
 
 .claude/*
 
+config.yaml
 # C extensions
 *.so
 
