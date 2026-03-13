@@ -18,12 +18,14 @@ class RelayClient:
         self._stop = threading.Event()
         self._backoff = 1
 
-    def connect(self):
+    def connect(self, timeout=60):
         self._stop.clear()
         self._connected.clear()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
-        self._connected.wait()
+        if not self._connected.wait(timeout=timeout):
+            self._stop.set()
+            raise ConnectionError("Timed out connecting to relay server")
 
     def disconnect(self):
         self._stop.set()
@@ -47,7 +49,7 @@ class RelayClient:
                     await self._authenticate(ws)
                     self._connected.set()
                     await self._receive_loop(ws)
-            except (OSError, websockets.exceptions.WebSocketException):
+            except (OSError, websockets.exceptions.WebSocketException, ConnectionError, asyncio.TimeoutError):
                 if self._stop.is_set():
                     break
                 await asyncio.sleep(self._backoff)
@@ -59,7 +61,7 @@ class RelayClient:
             last_signal_id=self._last_signal_id,
         )
         await ws.send(serialize(auth_msg))
-        response = await ws.recv()
+        response = await asyncio.wait_for(ws.recv(), timeout=10)
         result = deserialize(response)
         if not isinstance(result, AuthResult) or not result.success:
             raise ConnectionError("Authentication failed")

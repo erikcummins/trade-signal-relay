@@ -11,6 +11,7 @@ class WebhookNotifier:
             data = json.dumps({"content": text[:2000]}).encode()
             req = urllib.request.Request(self._url, data=data, method="POST")
             req.add_header("Content-Type", "application/json")
+            req.add_header("User-Agent", "TradeSignalRelay/1.0")
             urllib.request.urlopen(req, timeout=10)
         except Exception:
             pass
