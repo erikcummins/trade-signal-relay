@@ -40,72 +40,85 @@ package_lambda() {
 }
 
 create_iam_role() {
-    load_state
-    if [[ -n "${ROLE_ARN:-}" ]]; then
+    local role_created=false
+
+    if ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null); then
         echo "IAM role already exists: $ROLE_ARN"
-        return
+        save_state "ROLE_ARN" "$ROLE_ARN"
+    else
+        echo "Creating IAM role..."
+        local trust_policy='{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "lambda.amazonaws.com"},
+                "Action": "sts:AssumeRole"
+            }]
+        }'
+
+        ROLE_ARN=$(aws iam create-role \
+            --role-name "$ROLE_NAME" \
+            --assume-role-policy-document "$trust_policy" \
+            --query 'Role.Arn' --output text)
+        save_state "ROLE_ARN" "$ROLE_ARN"
+        echo "  Created role: $ROLE_ARN"
+        role_created=true
     fi
 
-    echo "Creating IAM role..."
-    local trust_policy='{
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Principal": {"Service": "lambda.amazonaws.com"},
-            "Action": "sts:AssumeRole"
-        }]
-    }'
+    local account_id
+    account_id=$(aws sts get-caller-identity --query 'Account' --output text)
+    local policy_name="${ROLE_NAME}-policy"
+    POLICY_ARN="arn:aws:iam::${account_id}:policy/${policy_name}"
 
-    ROLE_ARN=$(aws iam create-role \
-        --role-name "$ROLE_NAME" \
-        --assume-role-policy-document "$trust_policy" \
-        --query 'Role.Arn' --output text)
-    save_state "ROLE_ARN" "$ROLE_ARN"
-    echo "  Created role: $ROLE_ARN"
+    if aws iam get-policy --policy-arn "$POLICY_ARN" &>/dev/null; then
+        echo "IAM policy already exists: $POLICY_ARN"
+    else
+        echo "Creating IAM policy..."
+        local policy='{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "dynamodb:PutItem",
+                        "dynamodb:GetItem",
+                        "dynamodb:DeleteItem",
+                        "dynamodb:Scan",
+                        "dynamodb:Query"
+                    ],
+                    "Resource": "arn:aws:dynamodb:'"$REGION"':*:table/relay-*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "execute-api:ManageConnections",
+                    "Resource": "arn:aws:execute-api:'"$REGION"':*:*/@connections/*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents"
+                    ],
+                    "Resource": "arn:aws:logs:'"$REGION"':*:*"
+                }
+            ]
+        }'
 
-    echo "Attaching policies..."
-    local policy='{
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Action": [
-                    "dynamodb:PutItem",
-                    "dynamodb:GetItem",
-                    "dynamodb:DeleteItem",
-                    "dynamodb:Scan",
-                    "dynamodb:Query"
-                ],
-                "Resource": "arn:aws:dynamodb:'"$REGION"':*:table/relay-*"
-            },
-            {
-                "Effect": "Allow",
-                "Action": "execute-api:ManageConnections",
-                "Resource": "arn:aws:execute-api:'"$REGION"':*:*/@connections/*"
-            },
-            {
-                "Effect": "Allow",
-                "Action": [
-                    "logs:CreateLogGroup",
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents"
-                ],
-                "Resource": "arn:aws:logs:'"$REGION"':*:*"
-            }
-        ]
-    }'
-
-    POLICY_ARN=$(aws iam create-policy \
-        --policy-name "${ROLE_NAME}-policy" \
-        --policy-document "$policy" \
-        --query 'Policy.Arn' --output text)
+        POLICY_ARN=$(aws iam create-policy \
+            --policy-name "$policy_name" \
+            --policy-document "$policy" \
+            --query 'Policy.Arn' --output text)
+    fi
     save_state "POLICY_ARN" "$POLICY_ARN"
 
     aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$POLICY_ARN"
-    echo "  Attached inline policy"
+    echo "  Attached policy"
 
-    echo "  Waiting for role propagation..."
-    sleep 10
+    if [[ "$role_created" == true ]]; then
+        echo "  Waiting for role propagation..."
+        sleep 10
+    fi
 }
 
 create_dynamodb_tables() {
@@ -159,8 +172,9 @@ create_lambda() {
     load_state
     local zip_file="$SCRIPT_DIR/lambda.zip"
 
-    if [[ -n "${FUNCTION_ARN:-}" ]]; then
+    if FUNCTION_ARN=$(aws lambda get-function --function-name "$FUNCTION_NAME" --region "$REGION" --query 'Configuration.FunctionArn' --output text 2>/dev/null); then
         echo "Lambda function already exists, updating code..."
+        save_state "FUNCTION_ARN" "$FUNCTION_ARN"
         aws lambda update-function-code \
             --function-name "$FUNCTION_NAME" \
             --zip-file "fileb://$zip_file" \
@@ -188,8 +202,13 @@ create_lambda() {
 
 create_api_gateway() {
     load_state
-    if [[ -n "${API_ID:-}" ]]; then
+
+    API_ID=$(aws apigatewayv2 get-apis --region "$REGION" \
+        --query "Items[?Name=='${API_NAME}'].ApiId | [0]" --output text 2>/dev/null)
+
+    if [[ -n "$API_ID" && "$API_ID" != "None" ]]; then
         echo "API Gateway already exists: $API_ID"
+        save_state "API_ID" "$API_ID"
         return
     fi
 
@@ -249,7 +268,7 @@ create_api_gateway() {
         --action lambda:InvokeFunction \
         --principal apigateway.amazonaws.com \
         --source-arn "arn:aws:execute-api:${REGION}:${account_id}:${API_ID}/*" \
-        --region "$REGION" > /dev/null
+        --region "$REGION" > /dev/null 2>&1 || true
     echo "  Permission granted"
 }
 
