@@ -16,12 +16,13 @@ class AlpacaTrader:
         except Exception:
             return False
 
-    def execute_signal(self, signal: Signal) -> dict | None:
+    def execute_signal(self, signal: Signal, position_size: int | None = None) -> dict | None:
         if self.has_position(signal.ticker):
             return None
 
+        size = position_size if position_size is not None else self.position_size
         price = float(self.api.get_latest_trade(signal.ticker).price)
-        shares = int(self.position_size / price)
+        shares = int(size / price)
 
         if signal.side == "buy":
             tp_price = price * (1 + signal.tp_percent / 100)

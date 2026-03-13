@@ -18,6 +18,12 @@ class AlpacaConfig:
 @dataclass
 class TradingConfig:
     position_size: int = 10000
+    algo_sizes: dict = None
+
+    def get_position_size(self, algo_id: str | None) -> int:
+        if self.algo_sizes and algo_id and algo_id in self.algo_sizes:
+            return self.algo_sizes[algo_id]
+        return self.position_size
 
 
 @dataclass
@@ -65,8 +71,12 @@ def load_config(path: str) -> Config:
     )
 
     trading_raw = raw.get("trading") or {}
+    algo_sizes = trading_raw.get("algo_sizes")
+    if algo_sizes:
+        algo_sizes = {k: int(v) for k, v in algo_sizes.items()}
     trading = TradingConfig(
         position_size=trading_raw.get("position_size", 10000),
+        algo_sizes=algo_sizes,
     )
 
     eod_raw = raw.get("eod") or {}

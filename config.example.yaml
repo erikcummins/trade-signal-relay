@@ -7,7 +7,10 @@ alpaca:
   paper: true
 
 trading:
-  position_size: 10000
+  position_size: 10000       # default for all algos
+  algo_sizes:                # optional per-algo overrides
+    # myalgo: 5000
+    # otheralgo: 20000
 
 eod:
   stop_new_positions_minutes: 20

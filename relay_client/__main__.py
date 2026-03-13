@@ -36,7 +36,8 @@ def main():
 
     def on_signal(signal):
         if position_manager.accepting_new_positions:
-            result = trader.execute_signal(signal)
+            size = config.trading.get_position_size(signal.algo_id)
+            result = trader.execute_signal(signal, position_size=size)
             if result:
                 notifier.send_message(
                     f"Order: {result['side']} {result['shares']} {result['ticker']} "

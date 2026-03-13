@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import pytest
 import yaml
 
-from relay_client.config import load_config, ConfigError
+from relay_client.config import load_config, ConfigError, TradingConfig
 from relay_client.trader import AlpacaTrader
 from relay_client.position_manager import PositionManager
 from shared.messages import Signal
@@ -70,10 +70,27 @@ class TestConfigLoading:
             cfg = load_config(path)
             assert cfg.alpaca.paper is False
             assert cfg.trading.position_size == 10000
+            assert cfg.trading.algo_sizes is None
             assert cfg.eod.stop_new_positions_minutes == 20
             assert cfg.eod.close_all_minutes == 10
             assert cfg.discord.bot_token is None
             assert cfg.discord.channel_id is None
+        finally:
+            os.unlink(path)
+
+    def test_algo_sizes(self):
+        data = {**VALID_CONFIG, "trading": {
+            "position_size": 10000,
+            "algo_sizes": {"algo1": 5000, "algo2": 20000},
+        }}
+        path = _write_config(data)
+        try:
+            cfg = load_config(path)
+            assert cfg.trading.algo_sizes == {"algo1": 5000, "algo2": 20000}
+            assert cfg.trading.get_position_size("algo1") == 5000
+            assert cfg.trading.get_position_size("algo2") == 20000
+            assert cfg.trading.get_position_size("algo3") == 10000
+            assert cfg.trading.get_position_size(None) == 10000
         finally:
             os.unlink(path)
 
@@ -138,6 +155,15 @@ class TestAlpacaTrader:
         result = trader.execute_signal(_make_signal())
 
         assert result["shares"] == int(10000 / 33.33)
+
+    def test_position_size_override(self):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+
+        result = trader.execute_signal(_make_signal(), position_size=5000)
+
+        assert result["shares"] == 50
 
     def test_duplicate_position_skipped(self):
         trader, mock_api = self._make_trader()
