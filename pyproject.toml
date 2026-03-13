@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "trade-signal-relay"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+publisher = ["websockets"]
+client = ["websockets", "alpaca-trade-api", "discord.py", "pyyaml", "python-dotenv"]
+server = ["boto3"]
+dev = ["pytest", "pytest-asyncio", "moto[dynamodb]"]
+
+[project.scripts]
+trade-relay-client = "relay_client.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["shared*", "relay_publisher*", "relay_client*", "relay_server*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"

@@ -1,0 +1,18 @@
+relay_server: "wss://your-relay.execute-api.us-east-1.amazonaws.com/prod"
+access_key: "sub_youruser_abc123"
+
+alpaca:
+  api_key: "your-alpaca-api-key"
+  secret_key: "your-alpaca-secret-key"
+  paper: true
+
+trading:
+  position_size: 10000
+
+eod:
+  stop_new_positions_minutes: 20
+  close_all_minutes: 10
+
+discord:
+  bot_token: "your-discord-bot-token"
+  channel_id: "your-discord-channel-id"

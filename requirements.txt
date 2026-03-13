@@ -1,0 +1,6 @@
+websockets
+alpaca-trade-api
+discord.py
+pyyaml
+python-dotenv
+boto3
