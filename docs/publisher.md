@@ -1,5 +1,17 @@
 # Relay Publisher
 
+## Installation
+
+```bash
+pip install "trade-signal-relay[publisher] @ git+https://github.com/erikcummins/trade-signal-relay.git"
+```
+
+Or in your `requirements.txt`:
+
+```
+trade-signal-relay[publisher] @ git+https://github.com/erikcummins/trade-signal-relay.git
+```
+
 ## Integration
 
 ```python
