@@ -12,6 +12,7 @@ class AuthPublisher:
 @dataclass
 class AuthSubscriber:
     subscriber_key: str
+    last_signal_id: Optional[str] = None
     type: str = field(default="auth", init=False)
 
 
@@ -68,6 +69,8 @@ def serialize(msg) -> str:
     d = asdict(msg)
     if isinstance(msg, Signal) and msg.algo_id is None:
         del d["algo_id"]
+    if isinstance(msg, AuthSubscriber) and msg.last_signal_id is None:
+        del d["last_signal_id"]
     return json.dumps(d)
 
 
@@ -75,7 +78,10 @@ def _parse_auth(data: dict):
     if "publisher_key" in data:
         return AuthPublisher(publisher_key=data["publisher_key"])
     if "subscriber_key" in data:
-        return AuthSubscriber(subscriber_key=data["subscriber_key"])
+        return AuthSubscriber(
+            subscriber_key=data["subscriber_key"],
+            last_signal_id=data.get("last_signal_id"),
+        )
     raise ValidationError("Auth message must contain publisher_key or subscriber_key")
 
 
