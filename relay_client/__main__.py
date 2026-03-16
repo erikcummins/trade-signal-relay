@@ -2,6 +2,9 @@ import argparse
 import logging
 import time
 
+from requests.exceptions import ConnectionError, RequestException
+from urllib3.exceptions import ProtocolError
+
 from relay_client.config import load_config
 from relay_client.trader import AlpacaTrader
 from relay_client.position_manager import PositionManager
@@ -47,8 +50,13 @@ def main():
     def on_signal(signal):
         log.info("Signal received: %s %s %s", signal.action, signal.side, signal.ticker)
         if position_manager.accepting_new_positions:
-            size = config.trading.get_position_size(signal.algo_id)
-            result = trader.execute_signal(signal, position_size=size)
+            try:
+                size = config.trading.get_position_size(signal.algo_id)
+                result = trader.execute_signal(signal, position_size=size)
+            except (ConnectionError, ProtocolError, RequestException) as e:
+                log.error("Failed to execute signal %s: %s", signal.ticker, e)
+                notifier.send_message(f"Failed to execute signal {signal.ticker}: {e}")
+                return
             if result:
                 msg = (
                     f"Order: {result['side']} {result['shares']} {result['ticker']} "
@@ -73,7 +81,12 @@ def main():
     market_was_open = False
     try:
         while True:
-            market_open = position_manager.check_market_hours()
+            try:
+                market_open = position_manager.check_market_hours()
+            except (ConnectionError, ProtocolError, RequestException) as e:
+                log.warning("Alpaca API request failed, retrying: %s", e)
+                time.sleep(10)
+                continue
             if not market_open:
                 if market_was_open:
                     position_manager.reset()

@@ -1,6 +1,8 @@
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from urllib3.exceptions import ProtocolError
 
 from relay_client.discord_bot import NoOpNotifier, WebhookNotifier, create_notifier
 from relay_client.client import RelayClient
@@ -323,3 +325,101 @@ class TestMainLoop:
         pm.reset.assert_called_once()
         mock_sleep.assert_any_call(60)
         mock_notifier.send_message.assert_any_call("Market closed")
+
+    @patch("relay_client.__main__.time.sleep")
+    @patch("relay_client.__main__.RelayClient")
+    @patch("relay_client.__main__.create_notifier")
+    @patch("relay_client.__main__.PositionManager")
+    @patch("relay_client.__main__.tradeapi")
+    @patch("relay_client.__main__.AlpacaTrader")
+    @patch("relay_client.__main__.load_config")
+    def test_api_error_retries(self, mock_load, mock_trader_cls, mock_tradeapi,
+                                mock_pm_cls, mock_notifier_fn, mock_client_cls,
+                                mock_sleep):
+        config = MagicMock()
+        config.alpaca.paper = True
+        mock_load.return_value = config
+
+        pm = MagicMock()
+        call_count = 0
+
+        def check_hours():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RequestsConnectionError("Remote end closed connection")
+            if call_count == 2:
+                return True
+            raise KeyboardInterrupt()
+
+        pm.check_market_hours = MagicMock(side_effect=check_hours)
+        pm.market_close_time = None
+        mock_pm_cls.return_value = pm
+
+        mock_notifier = MagicMock()
+        mock_notifier_fn.return_value = mock_notifier
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        from relay_client.__main__ import main
+
+        with patch("argparse.ArgumentParser.parse_args",
+                   return_value=MagicMock(config="test.yaml")):
+            main()
+
+        assert call_count == 3
+        mock_sleep.assert_any_call(10)
+
+    @patch("relay_client.__main__.time.sleep")
+    @patch("relay_client.__main__.RelayClient")
+    @patch("relay_client.__main__.create_notifier")
+    @patch("relay_client.__main__.PositionManager")
+    @patch("relay_client.__main__.tradeapi")
+    @patch("relay_client.__main__.AlpacaTrader")
+    @patch("relay_client.__main__.load_config")
+    def test_signal_api_error_does_not_crash(self, mock_load, mock_trader_cls,
+                                              mock_tradeapi, mock_pm_cls,
+                                              mock_notifier_fn, mock_client_cls,
+                                              mock_sleep):
+        config = MagicMock()
+        config.alpaca.paper = True
+        mock_load.return_value = config
+
+        pm = MagicMock()
+        pm.accepting_new_positions = True
+
+        def check_hours():
+            raise KeyboardInterrupt()
+
+        pm.check_market_hours = MagicMock(side_effect=check_hours)
+        mock_pm_cls.return_value = pm
+
+        mock_trader = MagicMock()
+        mock_trader.execute_signal.side_effect = ProtocolError("Connection aborted")
+        mock_trader_cls.return_value = mock_trader
+
+        mock_notifier = MagicMock()
+        mock_notifier_fn.return_value = mock_notifier
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        from relay_client.__main__ import main
+
+        with patch("argparse.ArgumentParser.parse_args",
+                   return_value=MagicMock(config="test.yaml")):
+            main()
+
+        # Grab the on_signal callback and invoke it with a failing trader
+        on_signal = mock_client_cls.call_args[0][2]
+        signal = Signal(
+            signal_id="sig1", action="open", ticker="AAPL",
+            side="buy", tp_percent=2.0, sl_percent=1.0,
+            timestamp="2026-03-12T10:00:00Z", algo_id="algo1",
+        )
+        on_signal(signal)
+
+        # Verify it notified about the failure instead of crashing
+        notify_calls = [c[0][0] for c in mock_notifier.send_message.call_args_list]
+        assert any("Failed to execute signal AAPL" in msg for msg in notify_calls)

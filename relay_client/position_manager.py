@@ -1,6 +1,9 @@
 import logging
 import time
 
+from requests.exceptions import ConnectionError, RequestException
+from urllib3.exceptions import ProtocolError
+
 log = logging.getLogger("relay_client")
 
 
@@ -40,12 +43,19 @@ class PositionManager:
         return True
 
     def close_all_positions(self):
-        self.api.cancel_all_orders()
-        self.api.close_all_positions()
+        try:
+            self.api.cancel_all_orders()
+            self.api.close_all_positions()
+        except (ConnectionError, ProtocolError, RequestException) as e:
+            log.error("Failed to close positions: %s", e)
+            return
 
         for _ in range(5):
             time.sleep(1)
-            positions = self.api.list_positions()
+            try:
+                positions = self.api.list_positions()
+            except (ConnectionError, ProtocolError, RequestException):
+                continue
             if not positions:
                 return
 

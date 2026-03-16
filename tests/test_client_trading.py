@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 import yaml
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from urllib3.exceptions import ProtocolError
 
 from relay_client.config import load_config, ConfigError, TradingConfig
 from relay_client.trader import AlpacaTrader
@@ -301,3 +303,25 @@ class TestPositionManager:
         assert pm.accepting_new_positions is True
         assert pm.positions_closed_for_day is False
         assert pm.market_close_time is None
+
+    def test_close_all_survives_connection_error(self):
+        api = MagicMock()
+        api.cancel_all_orders.side_effect = RequestsConnectionError("Remote end closed connection")
+        pm = PositionManager(api)
+
+        pm.close_all_positions()
+
+        api.close_all_positions.assert_not_called()
+
+    @patch("relay_client.position_manager.time.sleep")
+    def test_close_all_retry_survives_connection_error(self, mock_sleep):
+        api = MagicMock()
+        api.list_positions.side_effect = [
+            ProtocolError("Connection aborted"),
+            [],
+        ]
+        pm = PositionManager(api)
+
+        pm.close_all_positions()
+
+        assert api.list_positions.call_count == 2
