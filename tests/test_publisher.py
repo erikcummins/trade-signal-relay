@@ -99,6 +99,23 @@ def _make_failing_connect_cm():
     return cm
 
 
+class TestSendFailureRequeue:
+    @pytest.mark.asyncio
+    async def test_failed_send_requeues_message(self):
+        pub = SignalPublisher("ws://localhost:8000", "pub_algo1_abc123")
+        pub.publish_open("AAPL", "buy", 2.5, 1.0)
+
+        mock_ws = AsyncMock()
+        mock_ws.send = AsyncMock(side_effect=OSError("Connection lost"))
+
+        with pytest.raises(OSError):
+            await pub._send_loop(mock_ws)
+
+        msg = pub._queue.get_nowait()
+        assert isinstance(msg, Signal)
+        assert msg.ticker == "AAPL"
+
+
 class TestReconnect:
     @pytest.mark.asyncio
     async def test_backoff_doubles_on_failure(self):

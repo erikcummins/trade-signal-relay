@@ -1,13 +1,14 @@
 import asyncio
 import queue
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
 import websockets
 
 from shared.auth import validate_publisher_key
-from shared.messages import AuthPublisher, AuthResult, Signal, serialize, deserialize
+from shared.messages import AuthPublisher, AuthResult, Ping, Signal, serialize, deserialize
 
 
 class SignalPublisher:
@@ -80,13 +81,22 @@ class SignalPublisher:
             raise ConnectionError("Authentication failed")
 
     async def _send_loop(self, ws):
+        last_send = time.monotonic()
         while not self._stop.is_set():
             try:
                 msg = await asyncio.get_event_loop().run_in_executor(
                     None, self._queue.get, True, 0.1
                 )
             except queue.Empty:
+                if time.monotonic() - last_send >= 300:
+                    await ws.send(serialize(Ping()))
+                    last_send = time.monotonic()
                 continue
             if msg is None:
                 break
-            await ws.send(serialize(msg))
+            try:
+                await ws.send(serialize(msg))
+                last_send = time.monotonic()
+            except Exception:
+                self._queue.put(msg)
+                raise

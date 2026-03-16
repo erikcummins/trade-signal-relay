@@ -272,6 +272,48 @@ class TestSignalRouting:
         assert len(response["Items"]) == 0
 
 
+class TestSignalDeduplication:
+    @mock_aws
+    def test_duplicate_signal_skips_fanout(self):
+        dynamodb = _create_tables()
+        conn_table = dynamodb.Table("relay-connections")
+
+        conn_table.put_item(Item={
+            "connection_id": "pub-conn",
+            "role": "publisher",
+            "key": "pub_algo1_abc123",
+            "algo_id": "algo1",
+        })
+        conn_table.put_item(Item={
+            "connection_id": "sub-conn-1",
+            "role": "subscriber",
+            "allowed_algos": ["algo1"],
+        })
+
+        mock_apigw = _mock_apigw()
+
+        with patch("relay_server.server._get_apigw_client", return_value=mock_apigw):
+            from relay_server.server import handler
+
+            signal = Signal(
+                signal_id="sig-1", action="open", ticker="AAPL",
+                side="buy", tp_percent=2.5, sl_percent=1.0,
+                timestamp="2026-03-12T00:00:00Z",
+            )
+            body = serialize(signal)
+            event = _make_event("$default", "pub-conn", body)
+            handler(event, None)
+            handler(event, None)
+
+        post_calls = mock_apigw.post_to_connection.call_args_list
+        sub_calls = [c for c in post_calls if c[1]["ConnectionId"] == "sub-conn-1"]
+        assert len(sub_calls) == 1
+
+        signals_table = dynamodb.Table("relay-signals")
+        response = signals_table.scan()
+        assert len(response["Items"]) == 1
+
+
 class TestMissedSignalReplay:
     @mock_aws
     def test_replay_on_reconnect(self):

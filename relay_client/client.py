@@ -3,7 +3,9 @@ import threading
 
 import websockets
 
-from shared.messages import AuthSubscriber, AuthResult, Signal, serialize, deserialize
+import time
+
+from shared.messages import AuthSubscriber, AuthResult, Ping, Signal, serialize, deserialize
 
 
 class RelayClient:
@@ -67,11 +69,16 @@ class RelayClient:
             raise ConnectionError("Authentication failed")
 
     async def _receive_loop(self, ws):
+        last_recv = time.monotonic()
         while not self._stop.is_set():
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
             except asyncio.TimeoutError:
+                if time.monotonic() - last_recv >= 300:
+                    await ws.send(serialize(Ping()))
+                    last_recv = time.monotonic()
                 continue
+            last_recv = time.monotonic()
             msg = deserialize(raw)
             if isinstance(msg, Signal):
                 self._last_signal_id = msg.signal_id

@@ -5,6 +5,8 @@ import uuid
 
 import boto3
 
+from botocore.exceptions import ClientError
+
 from shared.messages import serialize, deserialize, AuthResult, AuthSubscriber, Signal, Ping
 from relay_server.auth import validate_publisher, validate_subscriber, get_subscribers_for_algo
 
@@ -57,18 +59,21 @@ def _handle_disconnect(connection_id, connections_table):
 def _store_signal(signal, algo_id, signals_table):
     ttl = int(time.time()) + TTL_SECONDS
     sort_key = f"{signal.timestamp}#{signal.signal_id}"
-    signals_table.put_item(Item={
-        "algo_id": algo_id,
-        "timestamp#signal_id": sort_key,
-        "signal_id": signal.signal_id,
-        "action": signal.action,
-        "ticker": signal.ticker,
-        "side": signal.side,
-        "tp_percent": str(signal.tp_percent),
-        "sl_percent": str(signal.sl_percent),
-        "timestamp": signal.timestamp,
-        "ttl": ttl,
-    })
+    signals_table.put_item(
+        Item={
+            "algo_id": algo_id,
+            "timestamp#signal_id": sort_key,
+            "signal_id": signal.signal_id,
+            "action": signal.action,
+            "ticker": signal.ticker,
+            "side": signal.side,
+            "tp_percent": str(signal.tp_percent),
+            "sl_percent": str(signal.sl_percent),
+            "timestamp": signal.timestamp,
+            "ttl": ttl,
+        },
+        ConditionExpression="attribute_not_exists(algo_id)",
+    )
 
 
 def _replay_missed_signals(apigw, connection_id, last_signal_id, allowed_algos, signals_table):
@@ -124,7 +129,12 @@ def _handle_signal(signal, connection_id, apigw, connections_table, signals_tabl
 
     algo_id = item["algo_id"]
     signal.algo_id = algo_id
-    _store_signal(signal, algo_id, signals_table)
+    try:
+        _store_signal(signal, algo_id, signals_table)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return
+        raise
 
     subscriber_ids = get_subscribers_for_algo(algo_id, connections_table)
     signal_json = serialize(signal)
