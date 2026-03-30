@@ -174,6 +174,20 @@ class TestAlpacaTrader:
         assert result is None
         mock_api.submit_order.assert_not_called()
 
+    @patch("relay_client.trader.tradeapi")
+    def test_reset_connection(self, mock_tradeapi):
+        mock_api_1 = MagicMock()
+        mock_api_2 = MagicMock()
+        mock_tradeapi.REST.side_effect = [mock_api_1, mock_api_2]
+
+        trader = AlpacaTrader("ak", "sk", paper=True, position_size=10000)
+        assert trader.api is mock_api_1
+
+        trader.reset_connection()
+        assert trader.api is mock_api_2
+        assert mock_tradeapi.REST.call_count == 2
+        mock_tradeapi.REST.assert_called_with("ak", "sk", "https://paper-api.alpaca.markets")
+
     def test_bracket_order_params(self):
         trader, mock_api = self._make_trader()
         mock_api.get_position.side_effect = Exception("no position")

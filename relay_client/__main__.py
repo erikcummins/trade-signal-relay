@@ -78,15 +78,29 @@ def main():
     log.info("Connected to relay")
     notifier.send_message("Connected to relay")
 
+    consecutive_failures = 0
+    api_backoff = 10
     market_was_open = False
     try:
         while True:
             try:
                 market_open = position_manager.check_market_hours()
             except (ConnectionError, ProtocolError, RequestException) as e:
+                consecutive_failures += 1
                 log.warning("Alpaca API request failed, retrying: %s", e)
-                time.sleep(10)
+                if consecutive_failures >= 5:
+                    log.warning("Resetting API connections after %d failures", consecutive_failures)
+                    new_api = tradeapi.REST(config.alpaca.api_key, config.alpaca.secret_key, base_url)
+                    position_manager.api = new_api
+                    trader.reset_connection()
+                    notifier.send_message("API connections reset after repeated failures")
+                    consecutive_failures = 0
+                    api_backoff = 10
+                time.sleep(api_backoff)
+                api_backoff = min(api_backoff * 2, 60)
                 continue
+            consecutive_failures = 0
+            api_backoff = 10
             if not market_open:
                 if market_was_open:
                     position_manager.reset()

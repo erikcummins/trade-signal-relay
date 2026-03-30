@@ -6,8 +6,13 @@ from shared.messages import Signal
 class AlpacaTrader:
     def __init__(self, api_key: str, secret_key: str, paper: bool, position_size: int):
         self.position_size = position_size
-        base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
-        self.api = tradeapi.REST(api_key, secret_key, base_url)
+        self._api_key = api_key
+        self._secret_key = secret_key
+        self._base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+        self.api = tradeapi.REST(api_key, secret_key, self._base_url)
+
+    def reset_connection(self):
+        self.api = tradeapi.REST(self._api_key, self._secret_key, self._base_url)
 
     def has_position(self, ticker: str) -> bool:
         try:

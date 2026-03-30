@@ -378,6 +378,108 @@ class TestMainLoop:
     @patch("relay_client.__main__.tradeapi")
     @patch("relay_client.__main__.AlpacaTrader")
     @patch("relay_client.__main__.load_config")
+    def test_api_error_resets_connections_after_consecutive_failures(
+        self, mock_load, mock_trader_cls, mock_tradeapi, mock_pm_cls,
+        mock_notifier_fn, mock_client_cls, mock_sleep,
+    ):
+        config = MagicMock()
+        config.alpaca.paper = True
+        mock_load.return_value = config
+
+        pm = MagicMock()
+        pm.market_close_time = None
+        call_count = 0
+
+        def check_hours():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 5:
+                raise RequestsConnectionError("Connection aborted")
+            if call_count == 6:
+                return True
+            raise KeyboardInterrupt()
+
+        pm.check_market_hours = MagicMock(side_effect=check_hours)
+        mock_pm_cls.return_value = pm
+
+        mock_trader = MagicMock()
+        mock_trader_cls.return_value = mock_trader
+
+        mock_notifier = MagicMock()
+        mock_notifier_fn.return_value = mock_notifier
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        from relay_client.__main__ import main
+
+        with patch("argparse.ArgumentParser.parse_args",
+                   return_value=MagicMock(config="test.yaml")):
+            main()
+
+        assert mock_tradeapi.REST.call_count == 2
+        mock_trader.reset_connection.assert_called_once()
+        notify_calls = [c[0][0] for c in mock_notifier.send_message.call_args_list]
+        assert any("API connections reset" in msg for msg in notify_calls)
+
+    @patch("relay_client.__main__.time.sleep")
+    @patch("relay_client.__main__.RelayClient")
+    @patch("relay_client.__main__.create_notifier")
+    @patch("relay_client.__main__.PositionManager")
+    @patch("relay_client.__main__.tradeapi")
+    @patch("relay_client.__main__.AlpacaTrader")
+    @patch("relay_client.__main__.load_config")
+    def test_api_backoff_resets_on_success(self, mock_load, mock_trader_cls,
+                                           mock_tradeapi, mock_pm_cls,
+                                           mock_notifier_fn, mock_client_cls,
+                                           mock_sleep):
+        config = MagicMock()
+        config.alpaca.paper = True
+        mock_load.return_value = config
+
+        pm = MagicMock()
+        pm.market_close_time = None
+        call_count = 0
+
+        def check_hours():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise RequestsConnectionError("Connection aborted")
+            if call_count == 3:
+                return True
+            if call_count == 4:
+                raise RequestsConnectionError("Connection aborted")
+            raise KeyboardInterrupt()
+
+        pm.check_market_hours = MagicMock(side_effect=check_hours)
+        mock_pm_cls.return_value = pm
+
+        mock_notifier = MagicMock()
+        mock_notifier_fn.return_value = mock_notifier
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        from relay_client.__main__ import main
+
+        with patch("argparse.ArgumentParser.parse_args",
+                   return_value=MagicMock(config="test.yaml")):
+            main()
+
+        sleep_calls = [c[0][0] for c in mock_sleep.call_args_list]
+        assert sleep_calls[0] == 10
+        assert sleep_calls[1] == 20
+        assert sleep_calls[2] == 5
+        assert sleep_calls[3] == 10
+
+    @patch("relay_client.__main__.time.sleep")
+    @patch("relay_client.__main__.RelayClient")
+    @patch("relay_client.__main__.create_notifier")
+    @patch("relay_client.__main__.PositionManager")
+    @patch("relay_client.__main__.tradeapi")
+    @patch("relay_client.__main__.AlpacaTrader")
+    @patch("relay_client.__main__.load_config")
     def test_signal_api_error_does_not_crash(self, mock_load, mock_trader_cls,
                                               mock_tradeapi, mock_pm_cls,
                                               mock_notifier_fn, mock_client_cls,
