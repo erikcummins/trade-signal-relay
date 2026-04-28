@@ -45,6 +45,7 @@ def main():
         stop_new_minutes=config.eod.stop_new_positions_minutes,
         close_all_minutes=config.eod.close_all_minutes,
         notifier=notifier,
+        eod_time=config.eod.eod_time,
     )
 
     def on_signal(signal):

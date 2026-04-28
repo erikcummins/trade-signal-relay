@@ -15,6 +15,7 @@ trading:
 eod:
   stop_new_positions_minutes: 20
   close_all_minutes: 10
+  # eod_time: "15:30"        # optional HH:MM in market local time; defaults to actual market close
 
 discord:
   webhook_url: "https://discord.com/api/webhooks/your-webhook-url"
