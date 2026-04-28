@@ -246,19 +246,23 @@ class TestAlpacaTrader:
         trader.execute_signal(_make_signal(side="buy", tp=4.0, sl=2.0))
 
         assert mock_api.submit_order.call_count == 2
-        entry_call = mock_api.submit_order.call_args_list[0]
-        assert entry_call.kwargs == {
+        entry_kwargs = dict(mock_api.submit_order.call_args_list[0].kwargs)
+        entry_cid = entry_kwargs.pop("client_order_id")
+        assert entry_kwargs == {
             "symbol": "AAPL", "qty": 200, "side": "buy",
             "type": "market", "time_in_force": "day",
         }
-        exit_call = mock_api.submit_order.call_args_list[1]
-        assert exit_call.kwargs == {
+        assert entry_cid.startswith("algo1-")
+        exit_kwargs = dict(mock_api.submit_order.call_args_list[1].kwargs)
+        exit_cid = exit_kwargs.pop("client_order_id")
+        assert exit_kwargs == {
             "symbol": "AAPL", "qty": 200, "side": "sell",
             "type": "limit", "time_in_force": "day",
             "order_class": "oco",
             "take_profit": {"limit_price": 52.52},
             "stop_loss": {"stop_price": 49.49},
         }
+        assert exit_cid.startswith("algo1-exit-")
 
     def test_oco_failure_kills_position(self, _sleep):
         trader, mock_api = self._make_trader()
@@ -304,8 +308,9 @@ class TestAlpacaTrader:
 
         assert result["tp_price"] is None
         assert result["sl_price"] == 99.0
-        exit_call = mock_api.submit_order.call_args_list[1]
-        assert exit_call.kwargs == {
+        exit_kwargs = dict(mock_api.submit_order.call_args_list[1].kwargs)
+        exit_kwargs.pop("client_order_id")
+        assert exit_kwargs == {
             "symbol": "AAPL", "qty": 100, "side": "sell",
             "type": "stop", "time_in_force": "day",
             "stop_price": 99.0,
@@ -342,6 +347,39 @@ class TestAlpacaTrader:
             trader.execute_signal(_make_signal(tp=None, sl=1.0))
 
         mock_api.close_position.assert_called_once_with("AAPL")
+
+    def test_client_order_id_uses_algo_prefix(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        _setup_fill(mock_api, fill_price=100.0, filled_qty=100)
+
+        sig = Signal(
+            signal_id="s1", action="open", ticker="AAPL", side="buy",
+            tp_percent=2.0, sl_percent=1.0, timestamp="t", algo_id="newsmom",
+        )
+        trader.execute_signal(sig)
+
+        entry_cid = mock_api.submit_order.call_args_list[0].kwargs["client_order_id"]
+        exit_cid = mock_api.submit_order.call_args_list[1].kwargs["client_order_id"]
+        assert entry_cid.startswith("newsmom-") and not entry_cid.startswith("newsmom-exit-")
+        assert exit_cid.startswith("newsmom-exit-")
+        assert entry_cid != exit_cid
+
+    def test_no_algo_id_omits_client_order_id(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        _setup_fill(mock_api, fill_price=100.0, filled_qty=100)
+
+        sig = Signal(
+            signal_id="s1", action="open", ticker="AAPL", side="buy",
+            tp_percent=2.0, sl_percent=1.0, timestamp="t", algo_id=None,
+        )
+        trader.execute_signal(sig)
+
+        for call in mock_api.submit_order.call_args_list:
+            assert "client_order_id" not in call.kwargs
 
     def test_rejected_order_raises(self, _sleep):
         trader, mock_api = self._make_trader()

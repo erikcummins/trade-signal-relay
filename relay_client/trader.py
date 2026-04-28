@@ -1,4 +1,5 @@
 import time
+import uuid
 
 import alpaca_trade_api as tradeapi
 
@@ -46,13 +47,19 @@ class AlpacaTrader:
         if shares <= 0:
             return None
 
-        order = self.api.submit_order(
-            symbol=signal.ticker,
-            qty=shares,
-            side=signal.side,
-            type="market",
-            time_in_force="day",
-        )
+        entry_kwargs = {
+            "symbol": signal.ticker,
+            "qty": shares,
+            "side": signal.side,
+            "type": "market",
+            "time_in_force": "day",
+        }
+        exit_kwargs = {}
+        if signal.algo_id:
+            entry_kwargs["client_order_id"] = f"{signal.algo_id}-{uuid.uuid4().hex[:8]}"
+            exit_kwargs["client_order_id"] = f"{signal.algo_id}-exit-{uuid.uuid4().hex[:8]}"
+
+        order = self.api.submit_order(**entry_kwargs)
 
         fill_price, filled_qty = self._wait_for_fill(order.id)
 
@@ -70,6 +77,7 @@ class AlpacaTrader:
                     type="stop",
                     time_in_force="day",
                     stop_price=sl_price,
+                    **exit_kwargs,
                 )
             else:
                 self.api.submit_order(
@@ -81,6 +89,7 @@ class AlpacaTrader:
                     order_class="oco",
                     take_profit={"limit_price": tp_price},
                     stop_loss={"stop_price": sl_price},
+                    **exit_kwargs,
                 )
         except Exception as e:
             self._kill_position(signal.ticker)
