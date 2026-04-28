@@ -1,6 +1,6 @@
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, time as dt_time, timedelta
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
@@ -56,6 +56,7 @@ class TestConfigLoading:
             assert cfg.trading.position_size == 5000
             assert cfg.eod.stop_new_positions_minutes == 15
             assert cfg.eod.close_all_minutes == 5
+            assert cfg.eod.eod_time is None
             assert cfg.discord.webhook_url == "https://discord.com/api/webhooks/123/abc"
         finally:
             os.unlink(path)
@@ -91,6 +92,24 @@ class TestConfigLoading:
             assert cfg.trading.get_position_size("algo2") == 20000
             assert cfg.trading.get_position_size("algo3") == 10000
             assert cfg.trading.get_position_size(None) == 10000
+        finally:
+            os.unlink(path)
+
+    def test_eod_time_parsed(self):
+        data = {**VALID_CONFIG, "eod": {**VALID_CONFIG["eod"], "eod_time": "13:30"}}
+        path = _write_config(data)
+        try:
+            cfg = load_config(path)
+            assert cfg.eod.eod_time == dt_time(13, 30)
+        finally:
+            os.unlink(path)
+
+    def test_eod_time_invalid(self):
+        data = {**VALID_CONFIG, "eod": {**VALID_CONFIG["eod"], "eod_time": "nope"}}
+        path = _write_config(data)
+        try:
+            with pytest.raises(ConfigError, match="eod_time"):
+                load_config(path)
         finally:
             os.unlink(path)
 
@@ -458,6 +477,47 @@ class TestPositionManager:
         pm.close_all_positions()
 
         api.close_all_positions.assert_not_called()
+
+    def test_eod_time_overrides_close(self):
+        api = MagicMock()
+        clock = MagicMock()
+        clock.is_open = True
+        clock.timestamp = datetime(2026, 3, 12, 12, 0, 0)
+        clock.next_close = datetime(2026, 3, 12, 16, 0, 0)
+        api.get_clock.return_value = clock
+        pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, eod_time=dt_time(13, 0))
+
+        pm.check_market_hours()
+
+        assert pm.market_close_time == datetime(2026, 3, 12, 13, 0, 0)
+        assert pm.accepting_new_positions is True
+
+    def test_eod_time_triggers_stop_new(self):
+        api = MagicMock()
+        clock = MagicMock()
+        clock.is_open = True
+        clock.timestamp = datetime(2026, 3, 12, 12, 45, 0)
+        clock.next_close = datetime(2026, 3, 12, 16, 0, 0)
+        api.get_clock.return_value = clock
+        pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, eod_time=dt_time(13, 0))
+
+        pm.check_market_hours()
+
+        assert pm.accepting_new_positions is False
+        assert pm.positions_closed_for_day is False
+
+    def test_eod_time_after_close_ignored(self):
+        api = MagicMock()
+        clock = MagicMock()
+        clock.is_open = True
+        clock.timestamp = datetime(2026, 3, 12, 15, 0, 0)
+        clock.next_close = datetime(2026, 3, 12, 16, 0, 0)
+        api.get_clock.return_value = clock
+        pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, eod_time=dt_time(17, 0))
+
+        pm.check_market_hours()
+
+        assert pm.market_close_time == datetime(2026, 3, 12, 16, 0, 0)
 
     @patch("relay_client.position_manager.time.sleep")
     def test_close_all_retry_survives_connection_error(self, mock_sleep):

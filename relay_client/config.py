@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, time as dt_time
 from typing import Optional
 
 import yaml
@@ -30,6 +31,7 @@ class TradingConfig:
 class EodConfig:
     stop_new_positions_minutes: int = 20
     close_all_minutes: int = 10
+    eod_time: Optional[dt_time] = None
 
 
 @dataclass
@@ -79,9 +81,17 @@ def load_config(path: str) -> Config:
     )
 
     eod_raw = raw.get("eod") or {}
+    eod_time_raw = eod_raw.get("eod_time")
+    eod_time = None
+    if eod_time_raw:
+        try:
+            eod_time = datetime.strptime(str(eod_time_raw), "%H:%M").time()
+        except ValueError:
+            raise ConfigError(f"Invalid eod.eod_time format (expected HH:MM): {eod_time_raw}")
     eod = EodConfig(
         stop_new_positions_minutes=eod_raw.get("stop_new_positions_minutes", 20),
         close_all_minutes=eod_raw.get("close_all_minutes", 10),
+        eod_time=eod_time,
     )
 
     discord_raw = raw.get("discord") or {}

@@ -8,10 +8,11 @@ log = logging.getLogger("relay_client")
 
 
 class PositionManager:
-    def __init__(self, api, stop_new_minutes: int = 20, close_all_minutes: int = 10, notifier=None):
+    def __init__(self, api, stop_new_minutes: int = 20, close_all_minutes: int = 10, notifier=None, eod_time=None):
         self.api = api
         self.stop_new_minutes = stop_new_minutes
         self.close_all_minutes = close_all_minutes
+        self.eod_time = eod_time
         self.accepting_new_positions = True
         self.positions_closed_for_day = False
         self.market_close_time = None
@@ -22,8 +23,19 @@ class PositionManager:
         if not clock.is_open:
             return False
 
-        self.market_close_time = clock.next_close
-        minutes_to_close = (clock.next_close - clock.timestamp).total_seconds() / 60
+        effective_close = clock.next_close
+        if self.eod_time is not None:
+            custom_close = clock.next_close.replace(
+                hour=self.eod_time.hour,
+                minute=self.eod_time.minute,
+                second=0,
+                microsecond=0,
+            )
+            if custom_close < clock.next_close:
+                effective_close = custom_close
+
+        self.market_close_time = effective_close
+        minutes_to_close = (effective_close - clock.timestamp).total_seconds() / 60
 
         if minutes_to_close <= self.stop_new_minutes and self.accepting_new_positions:
             self.accepting_new_positions = False
