@@ -28,7 +28,7 @@ class Signal:
     action: str
     ticker: str
     side: str
-    tp_percent: float
+    tp_percent: Optional[float]
     sl_percent: float
     timestamp: str
     algo_id: Optional[str] = None
@@ -54,13 +54,13 @@ _VALID_SIDES = {"buy", "sell"}
 _VALID_ACTIONS = {"open"}
 
 
-def _validate_signal(action: str, side: str, tp_percent: float, sl_percent: float):
+def _validate_signal(action: str, side: str, tp_percent, sl_percent: float):
     if action not in _VALID_ACTIONS:
         raise ValidationError(f"Invalid action: {action}")
     if side not in _VALID_SIDES:
         raise ValidationError(f"Invalid side: {side}")
-    if tp_percent <= 0:
-        raise ValidationError(f"tp_percent must be > 0, got {tp_percent}")
+    if tp_percent is not None and tp_percent <= 0:
+        raise ValidationError(f"tp_percent must be > 0 or null, got {tp_percent}")
     if sl_percent <= 0:
         raise ValidationError(f"sl_percent must be > 0, got {sl_percent}")
 
@@ -72,6 +72,12 @@ def serialize(msg) -> str:
     if isinstance(msg, AuthSubscriber) and msg.last_signal_id is None:
         del d["last_signal_id"]
     return json.dumps(d)
+
+
+def _parse_tp(value):
+    if value is None:
+        return None
+    return float(value)
 
 
 def _parse_auth(data: dict):
@@ -87,7 +93,7 @@ def _parse_auth(data: dict):
 
 def _parse_signal(data: dict) -> Signal:
     try:
-        tp = float(data["tp_percent"])
+        tp = _parse_tp(data.get("tp_percent"))
         sl = float(data["sl_percent"])
     except (KeyError, ValueError, TypeError) as e:
         raise ValidationError(str(e))

@@ -43,6 +43,15 @@ class TestSerializationRoundTrip:
         assert result.ticker == "AAPL"
         assert result.algo_id is None
 
+    def test_signal_without_tp(self):
+        msg = Signal(
+            signal_id="abc-123", action="open", ticker="AAPL",
+            side="buy", tp_percent=None, sl_percent=1.0, timestamp="2026-01-01T00:00:00Z",
+        )
+        result = deserialize(serialize(msg))
+        assert result.tp_percent is None
+        assert result.sl_percent == 1.0
+
     def test_signal_with_algo_id(self):
         msg = Signal(
             signal_id="abc-123", action="open", ticker="TSLA",
@@ -112,6 +121,19 @@ class TestSignalValidation:
     def test_tp_percent_negative(self):
         with pytest.raises(ValidationError, match="tp_percent must be > 0"):
             deserialize(self._signal_json(tp_percent=-1))
+
+    def test_tp_percent_null_allowed(self):
+        result = deserialize(self._signal_json(tp_percent=None))
+        assert result.tp_percent is None
+
+    def test_tp_percent_omitted_allowed(self):
+        base = {
+            "type": "signal", "signal_id": "id1", "action": "open",
+            "ticker": "AAPL", "side": "buy",
+            "sl_percent": 1.0, "timestamp": "2026-01-01T00:00:00Z",
+        }
+        result = deserialize(json.dumps(base))
+        assert result.tp_percent is None
 
     def test_sl_percent_zero(self):
         with pytest.raises(ValidationError, match="sl_percent must be > 0"):

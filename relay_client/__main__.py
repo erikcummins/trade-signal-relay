@@ -6,7 +6,7 @@ from requests.exceptions import ConnectionError, RequestException
 from urllib3.exceptions import ProtocolError
 
 from relay_client.config import load_config
-from relay_client.trader import AlpacaTrader
+from relay_client.trader import AlpacaTrader, FillError, ExitOrderError
 from relay_client.position_manager import PositionManager
 from relay_client.discord_bot import create_notifier
 from relay_client.client import RelayClient
@@ -57,11 +57,16 @@ def main():
                 log.error("Failed to execute signal %s: %s", signal.ticker, e)
                 notifier.send_message(f"Failed to execute signal {signal.ticker}: {e}")
                 return
+            except (FillError, ExitOrderError) as e:
+                log.error("Order failed for %s: %s", signal.ticker, e)
+                notifier.send_message(f"Order failed for {signal.ticker}: {e}")
+                return
             if result:
+                tp_str = f"{result['tp_price']:.2f}" if result['tp_price'] is not None else "none"
                 msg = (
                     f"Order: {result['side']} {result['shares']} {result['ticker']} "
                     f"@ {result['entry_price']:.2f} "
-                    f"TP={result['tp_price']:.2f} SL={result['sl_price']:.2f}"
+                    f"TP={tp_str} SL={result['sl_price']:.2f}"
                 )
                 log.info(msg)
                 notifier.send_message(msg)

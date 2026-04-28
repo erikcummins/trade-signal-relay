@@ -19,12 +19,16 @@ Dataclasses: `Config`, `AlpacaConfig`, `TradingConfig`, `EodConfig`, `DiscordCon
 `AlpacaTrader(api_key, secret_key, paper, position_size)`:
 - `execute_signal(signal)` → dict with order details or None (if position already exists)
 - Checks existing positions via `api.get_position()` (exception = no position)
-- Gets current price via `api.get_latest_trade(ticker).price`
-- TP/SL calculation:
-  - BUY: `tp = price * (1 + tp_percent/100)`, `sl = price * (1 - sl_percent/100)`
-  - SELL: `tp = price * (1 - tp_percent/100)`, `sl = price * (1 + sl_percent/100)`
-- Shares: `int(position_size / price)`
-- Submits bracket order with market entry, TP limit, SL stop
+- Sizes shares from latest trade price: `int(position_size / price)`
+- Submits a plain market order, then polls `get_order` every 0.5s up to 10s for `filled` status. Cancels on timeout (`FillError`); raises on `canceled`/`expired`/`rejected`.
+- TP/SL computed from `filled_avg_price` (not pre-fill quote) to avoid slippage drift:
+  - BUY: `tp = fill * (1 + tp_percent/100)`, `sl = fill * (1 - sl_percent/100)`
+  - SELL: `tp = fill * (1 - tp_percent/100)`, `sl = fill * (1 + sl_percent/100)`
+  - Short TP clamped to `MIN_SHORT_TP_PRICE` ($0.01) when math drives it to ≤ 0
+- Exit order:
+  - With TP (`tp_percent` set): submits OCO (limit TP + stop SL) on the opposite side.
+  - Without TP (`tp_percent=None`, e.g. EOD-close strategies): submits a stop-only order; PositionManager closes the position at EOD.
+- If the exit submission fails, calls `close_position(ticker)` and raises `ExitOrderError`.
 
 ## Position Manager (`relay_client/position_manager.py`)
 

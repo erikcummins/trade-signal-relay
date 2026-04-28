@@ -9,7 +9,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from urllib3.exceptions import ProtocolError
 
 from relay_client.config import load_config, ConfigError, TradingConfig
-from relay_client.trader import AlpacaTrader
+from relay_client.trader import AlpacaTrader, FillError, ExitOrderError, MIN_SHORT_TP_PRICE
 from relay_client.position_manager import PositionManager
 from shared.messages import Signal
 
@@ -117,6 +117,20 @@ class TestConfigLoading:
             os.unlink(path)
 
 
+def _setup_fill(mock_api, fill_price, filled_qty, *, statuses=("filled",)):
+    entry = MagicMock(id="entry-1")
+    mock_api.submit_order.side_effect = [entry, MagicMock(id="exit-1")]
+    order_states = []
+    for s in statuses:
+        o = MagicMock()
+        o.status = s
+        o.filled_avg_price = str(fill_price)
+        o.filled_qty = str(filled_qty)
+        order_states.append(o)
+    mock_api.get_order.side_effect = order_states
+
+
+@patch("relay_client.trader.time.sleep")
 class TestAlpacaTrader:
     @patch("relay_client.trader.tradeapi")
     def _make_trader(self, mock_tradeapi):
@@ -125,47 +139,63 @@ class TestAlpacaTrader:
         trader = AlpacaTrader("ak", "sk", paper=True, position_size=10000)
         return trader, mock_api
 
-    def test_buy_tp_sl(self):
+    def test_buy_tp_sl_uses_fill_price(self, _sleep):
         trader, mock_api = self._make_trader()
         mock_api.get_position.side_effect = Exception("no position")
         mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        _setup_fill(mock_api, fill_price=101.5, filled_qty=100)
 
         result = trader.execute_signal(_make_signal(side="buy", tp=2.0, sl=1.0))
 
-        assert result["tp_price"] == 102.0
-        assert result["sl_price"] == 99.0
-        assert result["side"] == "buy"
+        assert result["entry_price"] == 101.5
+        assert result["tp_price"] == 103.53
+        assert result["sl_price"] == round(101.5 * 0.99, 2)
+        assert result["shares"] == 100
 
-    def test_sell_tp_sl(self):
+    def test_sell_tp_sl_uses_fill_price(self, _sleep):
         trader, mock_api = self._make_trader()
         mock_api.get_position.side_effect = Exception("no position")
         mock_api.get_latest_trade.return_value = MagicMock(price=200.0)
+        _setup_fill(mock_api, fill_price=198.0, filled_qty=50)
 
         result = trader.execute_signal(_make_signal(side="sell", tp=5.0, sl=2.0))
 
-        assert result["tp_price"] == 190.0
-        assert result["sl_price"] == 204.0
-        assert result["side"] == "sell"
+        assert result["entry_price"] == 198.0
+        assert result["tp_price"] == 188.10
+        assert result["sl_price"] == 201.96
 
-    def test_share_calculation(self):
+    def test_short_tp_clamped_above_zero(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=2.0)
+        _setup_fill(mock_api, fill_price=2.0, filled_qty=5000)
+
+        result = trader.execute_signal(_make_signal(side="sell", tp=99.5, sl=1.0))
+
+        assert result["tp_price"] == MIN_SHORT_TP_PRICE
+        assert result["tp_price"] > 0
+
+    def test_share_calculation(self, _sleep):
         trader, mock_api = self._make_trader()
         mock_api.get_position.side_effect = Exception("no position")
         mock_api.get_latest_trade.return_value = MagicMock(price=33.33)
+        _setup_fill(mock_api, fill_price=33.33, filled_qty=int(10000 / 33.33))
 
         result = trader.execute_signal(_make_signal())
 
         assert result["shares"] == int(10000 / 33.33)
 
-    def test_position_size_override(self):
+    def test_position_size_override(self, _sleep):
         trader, mock_api = self._make_trader()
         mock_api.get_position.side_effect = Exception("no position")
         mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        _setup_fill(mock_api, fill_price=100.0, filled_qty=50)
 
         result = trader.execute_signal(_make_signal(), position_size=5000)
 
         assert result["shares"] == 50
 
-    def test_duplicate_position_skipped(self):
+    def test_duplicate_position_skipped(self, _sleep):
         trader, mock_api = self._make_trader()
         mock_api.get_position.return_value = MagicMock()
 
@@ -175,7 +205,7 @@ class TestAlpacaTrader:
         mock_api.submit_order.assert_not_called()
 
     @patch("relay_client.trader.tradeapi")
-    def test_reset_connection(self, mock_tradeapi):
+    def test_reset_connection(self, mock_tradeapi, _sleep):
         mock_api_1 = MagicMock()
         mock_api_2 = MagicMock()
         mock_tradeapi.REST.side_effect = [mock_api_1, mock_api_2]
@@ -188,23 +218,125 @@ class TestAlpacaTrader:
         assert mock_tradeapi.REST.call_count == 2
         mock_tradeapi.REST.assert_called_with("ak", "sk", "https://paper-api.alpaca.markets")
 
-    def test_bracket_order_params(self):
+    def test_market_then_oco_orders(self, _sleep):
         trader, mock_api = self._make_trader()
         mock_api.get_position.side_effect = Exception("no position")
         mock_api.get_latest_trade.return_value = MagicMock(price=50.0)
+        _setup_fill(mock_api, fill_price=50.5, filled_qty=200)
 
         trader.execute_signal(_make_signal(side="buy", tp=4.0, sl=2.0))
 
-        mock_api.submit_order.assert_called_once_with(
-            symbol="AAPL",
-            qty=200,
-            side="buy",
-            type="market",
-            time_in_force="day",
-            order_class="bracket",
-            stop_loss={"stop_price": 49.0},
-            take_profit={"limit_price": 52.0},
-        )
+        assert mock_api.submit_order.call_count == 2
+        entry_call = mock_api.submit_order.call_args_list[0]
+        assert entry_call.kwargs == {
+            "symbol": "AAPL", "qty": 200, "side": "buy",
+            "type": "market", "time_in_force": "day",
+        }
+        exit_call = mock_api.submit_order.call_args_list[1]
+        assert exit_call.kwargs == {
+            "symbol": "AAPL", "qty": 200, "side": "sell",
+            "type": "limit", "time_in_force": "day",
+            "order_class": "oco",
+            "take_profit": {"limit_price": 52.52},
+            "stop_loss": {"stop_price": 49.49},
+        }
+
+    def test_oco_failure_kills_position(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        entry = MagicMock(id="entry-1")
+        mock_api.submit_order.side_effect = [entry, Exception("oco rejected")]
+        filled = MagicMock()
+        filled.status = "filled"
+        filled.filled_avg_price = "100.0"
+        filled.filled_qty = "100"
+        mock_api.get_order.return_value = filled
+
+        with pytest.raises(ExitOrderError):
+            trader.execute_signal(_make_signal(side="buy", tp=2.0, sl=1.0))
+
+        mock_api.close_position.assert_called_once_with("AAPL")
+
+    @patch("relay_client.trader.time.monotonic")
+    def test_fill_timeout_cancels_order(self, mock_monotonic, _sleep):
+        mock_monotonic.side_effect = [0.0, 0.1, 0.2, 999.0]
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        mock_api.submit_order.return_value = MagicMock(id="entry-1")
+        pending = MagicMock()
+        pending.status = "new"
+        mock_api.get_order.return_value = pending
+
+        with pytest.raises(FillError):
+            trader.execute_signal(_make_signal())
+
+        mock_api.cancel_order.assert_called_once_with("entry-1")
+
+    def test_no_tp_uses_stop_only_exit(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        _setup_fill(mock_api, fill_price=100.0, filled_qty=100)
+
+        sig = _make_signal(side="buy", tp=None, sl=1.0)
+        result = trader.execute_signal(sig)
+
+        assert result["tp_price"] is None
+        assert result["sl_price"] == 99.0
+        exit_call = mock_api.submit_order.call_args_list[1]
+        assert exit_call.kwargs == {
+            "symbol": "AAPL", "qty": 100, "side": "sell",
+            "type": "stop", "time_in_force": "day",
+            "stop_price": 99.0,
+        }
+
+    def test_no_tp_short_stop_only(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=50.0)
+        _setup_fill(mock_api, fill_price=50.0, filled_qty=200)
+
+        sig = _make_signal(side="sell", tp=None, sl=2.0)
+        result = trader.execute_signal(sig)
+
+        assert result["tp_price"] is None
+        exit_call = mock_api.submit_order.call_args_list[1]
+        assert exit_call.kwargs["type"] == "stop"
+        assert exit_call.kwargs["side"] == "buy"
+        assert exit_call.kwargs["stop_price"] == 51.0
+
+    def test_no_tp_stop_failure_kills_position(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        entry = MagicMock(id="entry-1")
+        mock_api.submit_order.side_effect = [entry, Exception("stop rejected")]
+        filled = MagicMock()
+        filled.status = "filled"
+        filled.filled_avg_price = "100.0"
+        filled.filled_qty = "100"
+        mock_api.get_order.return_value = filled
+
+        with pytest.raises(ExitOrderError):
+            trader.execute_signal(_make_signal(tp=None, sl=1.0))
+
+        mock_api.close_position.assert_called_once_with("AAPL")
+
+    def test_rejected_order_raises(self, _sleep):
+        trader, mock_api = self._make_trader()
+        mock_api.get_position.side_effect = Exception("no position")
+        mock_api.get_latest_trade.return_value = MagicMock(price=100.0)
+        mock_api.submit_order.return_value = MagicMock(id="entry-1")
+        rejected = MagicMock()
+        rejected.status = "rejected"
+        mock_api.get_order.return_value = rejected
+
+        with pytest.raises(FillError):
+            trader.execute_signal(_make_signal())
+
+        assert mock_api.submit_order.call_count == 1
 
 
 class TestPositionManager:

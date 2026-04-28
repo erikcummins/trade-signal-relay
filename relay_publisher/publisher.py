@@ -31,7 +31,7 @@ class SignalPublisher:
         self._thread.start()
         self._connected.wait()
 
-    def publish_open(self, ticker: str, side: str, tp_percent: float, sl_percent: float):
+    def publish_open(self, ticker: str, side: str, tp_percent: float | None, sl_percent: float):
         signal = Signal(
             signal_id=str(uuid.uuid4()),
             action="open",
