@@ -33,14 +33,18 @@ class TestPerPositionEodCloser:
     def test_closes_position_at_or_after_eod(self):
         api = MagicMock()
         api.get_clock.return_value = _clock("15:55")
-        api.list_orders.return_value = [MagicMock(id="ord-1"), MagicMock(id="ord-2")]
+        api.list_orders.side_effect = [
+            [MagicMock(id="ord-1"), MagicMock(id="ord-2")],
+            [],
+        ]
         notifier = MagicMock()
-        closer = PerPositionEodCloser(api, notifier=notifier)
+        closer = PerPositionEodCloser(api, notifier=notifier, sleep=lambda _: None)
         closer.register("AAPL", dt_time(15, 55))
 
         closer.check_and_close()
 
-        api.list_orders.assert_called_once_with(status="open", symbols="AAPL")
+        assert api.list_orders.call_count == 2
+        api.list_orders.assert_any_call(status="open", symbols="AAPL")
         assert api.cancel_order.call_count == 2
         api.close_position.assert_called_once_with("AAPL")
         notifier.send_message.assert_called_once_with("Closed AAPL (per-position EOD)")
@@ -59,9 +63,10 @@ class TestPerPositionEodCloser:
         api.close_position.assert_not_called()
 
     def test_skips_when_position_already_gone(self):
+        from alpaca_trade_api.rest import APIError
         api = MagicMock()
         api.get_clock.return_value = _clock("16:00")
-        api.get_position.side_effect = Exception("position not found")
+        api.get_position.side_effect = APIError({"message": "position not found"})
         closer = PerPositionEodCloser(api)
         closer.register("AAPL", dt_time(15, 55))
 
@@ -70,6 +75,19 @@ class TestPerPositionEodCloser:
         api.close_position.assert_not_called()
         closer.check_and_close()
         api.get_position.assert_called_once()
+
+    def test_get_position_transient_failure_keeps_entry(self):
+        from requests.exceptions import ConnectionError as RequestsConnectionError
+        api = MagicMock()
+        api.get_clock.return_value = _clock("16:00")
+        api.get_position.side_effect = RequestsConnectionError("net down")
+        closer = PerPositionEodCloser(api)
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        api.close_position.assert_not_called()
+        assert closer._entries == {"AAPL": dt_time(15, 55)}
 
     def test_only_closes_targeted_ticker(self):
         api = MagicMock()
@@ -90,6 +108,90 @@ class TestPerPositionEodCloser:
         api.get_clock.return_value = _clock("15:55")
         api.list_orders.return_value = []
         api.close_position.side_effect = RequestsConnectionError("net down")
+        closer = PerPositionEodCloser(api)
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        assert closer._entries == {"AAPL": dt_time(15, 55)}
+
+    def test_api_error_on_close_keeps_entry_for_retry(self):
+        from alpaca_trade_api.rest import APIError
+        api = MagicMock()
+        api.get_clock.return_value = _clock("15:55")
+        api.list_orders.return_value = []
+        api.close_position.side_effect = APIError({"message": "insufficient qty available for order (requested: 365, available: 0)"})
+        closer = PerPositionEodCloser(api, sleep=lambda _: None)
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        assert closer._entries == {"AAPL": dt_time(15, 55)}
+
+    def test_waits_for_cancellations_before_close(self):
+        api = MagicMock()
+        api.get_clock.return_value = _clock("15:55")
+        api.list_orders.side_effect = [
+            [MagicMock(id="ord-1")],
+            [MagicMock(id="ord-1")],
+            [MagicMock(id="ord-1")],
+            [],
+        ]
+        sleeps = []
+        closer = PerPositionEodCloser(api, sleep=lambda s: sleeps.append(s))
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        assert api.list_orders.call_count == 4
+        api.close_position.assert_called_once_with("AAPL")
+        assert len(sleeps) == 2
+
+    def test_close_proceeds_if_orders_never_clear(self):
+        api = MagicMock()
+        api.get_clock.return_value = _clock("15:55")
+        api.list_orders.return_value = [MagicMock(id="ord-1")]
+        closer = PerPositionEodCloser(api, sleep=lambda _: None)
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        api.close_position.assert_called_once_with("AAPL")
+
+    def test_cancel_failure_does_not_abort_close(self):
+        from alpaca_trade_api.rest import APIError
+        api = MagicMock()
+        api.get_clock.return_value = _clock("15:55")
+        api.list_orders.side_effect = [
+            [MagicMock(id="ord-1"), MagicMock(id="ord-2")],
+            [],
+        ]
+        api.cancel_order.side_effect = [APIError({"message": "already filled"}), None]
+        closer = PerPositionEodCloser(api, sleep=lambda _: None)
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        assert api.cancel_order.call_count == 2
+        api.close_position.assert_called_once_with("AAPL")
+
+    def test_list_orders_failure_skips_settle_and_attempts_close(self):
+        from alpaca_trade_api.rest import APIError
+        api = MagicMock()
+        api.get_clock.return_value = _clock("15:55")
+        api.list_orders.side_effect = APIError({"message": "boom"})
+        closer = PerPositionEodCloser(api, sleep=lambda _: None)
+        closer.register("AAPL", dt_time(15, 55))
+
+        closer.check_and_close()
+
+        api.cancel_order.assert_not_called()
+        api.close_position.assert_called_once_with("AAPL")
+
+    def test_clock_api_error_does_not_clear_entries(self):
+        from alpaca_trade_api.rest import APIError
+        api = MagicMock()
+        api.get_clock.side_effect = APIError({"message": "boom"})
         closer = PerPositionEodCloser(api)
         closer.register("AAPL", dt_time(15, 55))
 
