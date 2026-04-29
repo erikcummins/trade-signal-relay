@@ -8,6 +8,7 @@ from urllib3.exceptions import ProtocolError
 from relay_client.config import load_config
 from relay_client.trader import AlpacaTrader, FillError, ExitOrderError
 from relay_client.position_manager import PositionManager
+from relay_client.per_position_eod import PerPositionEodCloser, parse_eod_time
 from relay_client.discord_bot import create_notifier
 from relay_client.client import RelayClient
 
@@ -47,6 +48,7 @@ def main():
         notifier=notifier,
         eod_time=config.eod.eod_time,
     )
+    per_position_eod = PerPositionEodCloser(api, notifier=notifier)
 
     def on_signal(signal):
         log.info("Signal received: %s %s %s", signal.action, signal.side, signal.ticker)
@@ -63,6 +65,11 @@ def main():
                 notifier.send_message(f"Order failed for {signal.ticker}: {e}")
                 return
             if result:
+                if signal.eod_time:
+                    try:
+                        per_position_eod.register(signal.ticker, parse_eod_time(signal.eod_time))
+                    except ValueError as e:
+                        log.warning("Invalid eod_time for %s: %s", signal.ticker, e)
                 tp_str = f"{result['tp_price']:.2f}" if result['tp_price'] is not None else "none"
                 msg = (
                     f"Order: {result['side']} {result['shares']} {result['ticker']} "
@@ -122,6 +129,7 @@ def main():
                     log.info(msg)
                     notifier.send_message(msg)
                 market_was_open = True
+                per_position_eod.check_and_close()
                 time.sleep(5)
     except KeyboardInterrupt:
         log.info("Shutting down")

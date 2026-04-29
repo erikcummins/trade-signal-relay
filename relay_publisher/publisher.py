@@ -31,7 +31,7 @@ class SignalPublisher:
         self._thread.start()
         self._connected.wait()
 
-    def publish_open(self, ticker: str, side: str, tp_percent: float | None, sl_percent: float):
+    def publish_open(self, ticker: str, side: str, tp_percent: float | None, sl_percent: float, eod_time: str | None = None):
         signal = Signal(
             signal_id=str(uuid.uuid4()),
             action="open",
@@ -40,6 +40,7 @@ class SignalPublisher:
             tp_percent=tp_percent,
             sl_percent=sl_percent,
             timestamp=datetime.now(timezone.utc).isoformat(),
+            eod_time=eod_time,
         )
         self._queue.put(signal)
 

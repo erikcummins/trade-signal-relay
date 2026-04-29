@@ -60,6 +60,24 @@ class TestMessageConstruction:
         assert data["action"] == "open"
         assert data["ticker"] == "AAPL"
 
+    def test_publish_open_with_eod_time(self):
+        pub = SignalPublisher("ws://localhost:8000", "pub_algo1_abc123")
+        pub.publish_open("AAPL", "buy", 2.5, 1.0, eod_time="15:55")
+
+        msg = pub._queue.get_nowait()
+        assert msg.eod_time == "15:55"
+        data = json.loads(serialize(msg))
+        assert data["eod_time"] == "15:55"
+
+    def test_publish_open_without_eod_time_omits_field(self):
+        pub = SignalPublisher("ws://localhost:8000", "pub_algo1_abc123")
+        pub.publish_open("AAPL", "buy", 2.5, 1.0)
+
+        msg = pub._queue.get_nowait()
+        assert msg.eod_time is None
+        data = json.loads(serialize(msg))
+        assert "eod_time" not in data
+
 
 class TestAuthFlow:
     @pytest.mark.asyncio

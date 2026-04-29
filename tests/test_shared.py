@@ -143,6 +143,19 @@ class TestSignalValidation:
         with pytest.raises(ValidationError, match="sl_percent must be > 0"):
             deserialize(self._signal_json(sl_percent=-1))
 
+    def test_eod_time_valid(self):
+        result = deserialize(self._signal_json(eod_time="15:55"))
+        assert result.eod_time == "15:55"
+
+    def test_eod_time_omitted_allowed(self):
+        result = deserialize(self._signal_json())
+        assert result.eod_time is None
+
+    @pytest.mark.parametrize("bad", ["25:00", "12:60", "1:30", "abc", "12-30"])
+    def test_eod_time_invalid_format(self, bad):
+        with pytest.raises(ValidationError, match="eod_time"):
+            deserialize(self._signal_json(eod_time=bad))
+
 
 class TestKeyValidation:
     def test_valid_publisher_keys(self):

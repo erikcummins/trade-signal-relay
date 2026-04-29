@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from typing import Optional
 import json
+import re
 
 
 @dataclass
@@ -32,6 +34,7 @@ class Signal:
     sl_percent: float
     timestamp: str
     algo_id: Optional[str] = None
+    eod_time: Optional[str] = None
     type: str = field(default="signal", init=False)
 
 
@@ -52,9 +55,10 @@ class ValidationError(Exception):
 
 _VALID_SIDES = {"buy", "sell"}
 _VALID_ACTIONS = {"open"}
+_EOD_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
-def _validate_signal(action: str, side: str, tp_percent, sl_percent: float):
+def _validate_signal(action: str, side: str, tp_percent, sl_percent: float, eod_time):
     if action not in _VALID_ACTIONS:
         raise ValidationError(f"Invalid action: {action}")
     if side not in _VALID_SIDES:
@@ -63,12 +67,17 @@ def _validate_signal(action: str, side: str, tp_percent, sl_percent: float):
         raise ValidationError(f"tp_percent must be > 0 or null, got {tp_percent}")
     if sl_percent <= 0:
         raise ValidationError(f"sl_percent must be > 0, got {sl_percent}")
+    if eod_time is not None and not _EOD_TIME_RE.match(eod_time):
+        raise ValidationError(f"eod_time must be HH:MM (24h), got {eod_time}")
 
 
 def serialize(msg) -> str:
     d = asdict(msg)
-    if isinstance(msg, Signal) and msg.algo_id is None:
-        del d["algo_id"]
+    if isinstance(msg, Signal):
+        if msg.algo_id is None:
+            del d["algo_id"]
+        if msg.eod_time is None:
+            del d["eod_time"]
     if isinstance(msg, AuthSubscriber) and msg.last_signal_id is None:
         del d["last_signal_id"]
     return json.dumps(d)
@@ -97,7 +106,8 @@ def _parse_signal(data: dict) -> Signal:
         sl = float(data["sl_percent"])
     except (KeyError, ValueError, TypeError) as e:
         raise ValidationError(str(e))
-    _validate_signal(data.get("action", ""), data.get("side", ""), tp, sl)
+    eod_time = data.get("eod_time")
+    _validate_signal(data.get("action", ""), data.get("side", ""), tp, sl, eod_time)
     return Signal(
         signal_id=data["signal_id"],
         action=data["action"],
@@ -107,6 +117,7 @@ def _parse_signal(data: dict) -> Signal:
         sl_percent=sl,
         timestamp=data["timestamp"],
         algo_id=data.get("algo_id"),
+        eod_time=eod_time,
     )
 
 

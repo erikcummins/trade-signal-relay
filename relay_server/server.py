@@ -70,6 +70,7 @@ def _store_signal(signal, algo_id, signals_table):
             "tp_percent": "null" if signal.tp_percent is None else str(signal.tp_percent),
             "sl_percent": str(signal.sl_percent),
             "timestamp": signal.timestamp,
+            "eod_time": signal.eod_time if signal.eod_time is not None else "null",
             "ttl": ttl,
         },
         ConditionExpression="attribute_not_exists(algo_id)",
@@ -90,6 +91,7 @@ def _replay_missed_signals(apigw, connection_id, last_signal_id, allowed_algos, 
                 if item["signal_id"] == last_signal_id:
                     found_marker = True
                 continue
+            stored_eod = item.get("eod_time")
             signal = Signal(
                 signal_id=item["signal_id"],
                 action=item["action"],
@@ -99,6 +101,7 @@ def _replay_missed_signals(apigw, connection_id, last_signal_id, allowed_algos, 
                 sl_percent=float(item["sl_percent"]),
                 timestamp=item["timestamp"],
                 algo_id=algo_id,
+                eod_time=None if stored_eod in (None, "null") else stored_eod,
             )
             signals_to_send.append((item["timestamp#signal_id"], signal))
 
