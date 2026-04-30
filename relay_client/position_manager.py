@@ -1,10 +1,16 @@
 import logging
 import time
 
+from alpaca_trade_api.rest import APIError
 from requests.exceptions import ConnectionError, RequestException
 from urllib3.exceptions import ProtocolError
 
 log = logging.getLogger("relay_client")
+
+CANCEL_SETTLE_TIMEOUT = 10.0
+CANCEL_SETTLE_INTERVAL = 0.5
+CLOSE_RETRY_ATTEMPTS = 5
+CLOSE_RETRY_INTERVAL = 1.0
 
 
 class PositionManager:
@@ -57,19 +63,45 @@ class PositionManager:
     def close_all_positions(self):
         try:
             self.api.cancel_all_orders()
-            self.api.close_all_positions()
-        except (ConnectionError, ProtocolError, RequestException) as e:
-            log.error("Failed to close positions: %s", e)
+        except (ConnectionError, ProtocolError, RequestException, APIError) as e:
+            log.error("Failed to cancel orders: %s", e)
             return
 
-        for _ in range(5):
-            time.sleep(1)
+        self._wait_for_orders_clear()
+
+        for attempt in range(CLOSE_RETRY_ATTEMPTS):
+            try:
+                self.api.close_all_positions()
+            except (ConnectionError, ProtocolError, RequestException, APIError) as e:
+                log.warning("close_all_positions attempt %d failed: %s", attempt + 1, e)
+
+            time.sleep(CLOSE_RETRY_INTERVAL)
             try:
                 positions = self.api.list_positions()
-            except (ConnectionError, ProtocolError, RequestException):
+            except (ConnectionError, ProtocolError, RequestException, APIError) as e:
+                log.warning("list_positions failed: %s", e)
                 continue
             if not positions:
                 return
+
+        log.error("Positions still open after %d close attempts", CLOSE_RETRY_ATTEMPTS)
+        if self.notifier:
+            self.notifier.send_message(f"EOD close failed: positions still open after {CLOSE_RETRY_ATTEMPTS} attempts")
+
+    def _wait_for_orders_clear(self):
+        deadline = time.monotonic() + CANCEL_SETTLE_TIMEOUT
+        while True:
+            try:
+                remaining = self.api.list_orders(status="open")
+            except (ConnectionError, ProtocolError, RequestException, APIError) as e:
+                log.warning("list_orders during settle failed: %s", e)
+                return
+            if not remaining:
+                return
+            if time.monotonic() >= deadline:
+                log.warning("%d orders still open after %.1fs", len(remaining), CANCEL_SETTLE_TIMEOUT)
+                return
+            time.sleep(CANCEL_SETTLE_INTERVAL)
 
     def reset(self):
         self.accepting_new_positions = True

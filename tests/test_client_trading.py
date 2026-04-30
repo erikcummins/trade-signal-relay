@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 import yaml
+from alpaca_trade_api.rest import APIError
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from urllib3.exceptions import ProtocolError
 
@@ -444,6 +445,7 @@ class TestPositionManager:
     def test_close_all_at_threshold(self, mock_sleep):
         api = MagicMock()
         api.get_clock.return_value = self._make_clock(is_open=True, minutes_to_close=5)
+        api.list_orders.return_value = []
         api.list_positions.return_value = []
         pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10)
 
@@ -458,6 +460,7 @@ class TestPositionManager:
     def test_close_all_notifies(self, mock_sleep):
         api = MagicMock()
         api.get_clock.return_value = self._make_clock(is_open=True, minutes_to_close=5)
+        api.list_orders.return_value = []
         api.list_positions.return_value = []
         notifier = MagicMock()
         pm = PositionManager(api, stop_new_minutes=20, close_all_minutes=10, notifier=notifier)
@@ -482,6 +485,7 @@ class TestPositionManager:
     @patch("relay_client.position_manager.time.sleep")
     def test_close_all_retry(self, mock_sleep):
         api = MagicMock()
+        api.list_orders.return_value = []
         api.list_positions.side_effect = [
             [MagicMock()],
             [MagicMock()],
@@ -491,7 +495,7 @@ class TestPositionManager:
 
         pm.close_all_positions()
 
-        assert mock_sleep.call_count == 3
+        assert api.close_all_positions.call_count == 3
         assert api.list_positions.call_count == 3
 
     def test_reset(self):
@@ -560,6 +564,7 @@ class TestPositionManager:
     @patch("relay_client.position_manager.time.sleep")
     def test_close_all_retry_survives_connection_error(self, mock_sleep):
         api = MagicMock()
+        api.list_orders.return_value = []
         api.list_positions.side_effect = [
             ProtocolError("Connection aborted"),
             [],
@@ -569,3 +574,80 @@ class TestPositionManager:
         pm.close_all_positions()
 
         assert api.list_positions.call_count == 2
+
+    @patch("relay_client.position_manager.time.sleep")
+    def test_close_all_waits_for_orders_to_clear_before_closing(self, mock_sleep):
+        """Reproduces the bug where close_all_positions was called before
+        cancel_all_orders settled, causing Alpaca to reject closes for shares
+        still tied up in pending-cancel OCO orders."""
+        api = MagicMock()
+        call_log = []
+        api.cancel_all_orders.side_effect = lambda: call_log.append("cancel_all_orders")
+        api.list_orders.side_effect = lambda **kw: (
+            call_log.append("list_orders"),
+            [MagicMock(), MagicMock()] if call_log.count("list_orders") < 3 else [],
+        )[1]
+        api.close_all_positions.side_effect = lambda: call_log.append("close_all_positions")
+        api.list_positions.return_value = []
+        pm = PositionManager(api)
+
+        pm.close_all_positions()
+
+        cancel_idx = call_log.index("cancel_all_orders")
+        first_close_idx = call_log.index("close_all_positions")
+        last_orders_before_close = max(
+            i for i, name in enumerate(call_log[:first_close_idx]) if name == "list_orders"
+        )
+        assert cancel_idx < last_orders_before_close < first_close_idx
+
+    @patch("relay_client.position_manager.time.sleep")
+    def test_close_all_retries_when_positions_remain(self, mock_sleep):
+        """When close_all_positions returns 207 with rejections (positions stay
+        open), the retry loop must call close_all_positions again, not just
+        poll list_positions."""
+        api = MagicMock()
+        api.list_orders.return_value = []
+        api.list_positions.side_effect = [[MagicMock()], [MagicMock()], []]
+        pm = PositionManager(api)
+
+        pm.close_all_positions()
+
+        assert api.close_all_positions.call_count == 3
+
+    @patch("relay_client.position_manager.time.sleep")
+    def test_close_all_survives_apierror_on_close(self, mock_sleep):
+        api = MagicMock()
+        api.list_orders.return_value = []
+        api.close_all_positions.side_effect = APIError({"message": "boom", "code": 500})
+        api.list_positions.return_value = [MagicMock()]
+        notifier = MagicMock()
+        pm = PositionManager(api, notifier=notifier)
+
+        pm.close_all_positions()
+
+        assert api.close_all_positions.call_count == 5
+        notifier.send_message.assert_called_once()
+        assert "EOD close failed" in notifier.send_message.call_args[0][0]
+
+    @patch("relay_client.position_manager.time.sleep")
+    def test_close_all_survives_apierror_on_cancel(self, mock_sleep):
+        api = MagicMock()
+        api.cancel_all_orders.side_effect = APIError({"message": "boom", "code": 500})
+        pm = PositionManager(api)
+
+        pm.close_all_positions()
+
+        api.close_all_positions.assert_not_called()
+
+    @patch("relay_client.position_manager.time.sleep")
+    @patch("relay_client.position_manager.time.monotonic")
+    def test_wait_for_orders_clear_times_out(self, mock_monotonic, mock_sleep):
+        api = MagicMock()
+        api.list_orders.return_value = [MagicMock()]
+        api.list_positions.return_value = []
+        mock_monotonic.side_effect = [0.0, 0.0, 5.0, 11.0, 12.0, 13.0]
+        pm = PositionManager(api)
+
+        pm.close_all_positions()
+
+        api.close_all_positions.assert_called()
