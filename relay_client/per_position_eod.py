@@ -73,7 +73,7 @@ class PerPositionEodCloser:
     def _close(self, ticker):
         try:
             self._cancel_open_orders(ticker)
-            self._wait_for_orders_clear(ticker)
+            self._wait_for_qty_available(ticker)
             self.api.close_position(ticker)
             return True
         except (ConnectionError, ProtocolError, RequestException, APIError) as e:
@@ -85,7 +85,7 @@ class PerPositionEodCloser:
 
     def _cancel_open_orders(self, ticker):
         try:
-            orders = self.api.list_orders(status="open", symbols=ticker)
+            orders = self.api.list_orders(status="open", symbols=[ticker], nested=True)
         except (ConnectionError, ProtocolError, RequestException, APIError) as e:
             log.warning("Per-position EOD: list_orders(%s) failed: %s", ticker, e)
             return
@@ -100,18 +100,24 @@ class PerPositionEodCloser:
             except Exception as e:
                 log.warning("Per-position EOD: cancel_order(%s) unexpected: %s", order_id, e)
 
-    def _wait_for_orders_clear(self, ticker):
+    def _wait_for_qty_available(self, ticker):
         deadline = time.monotonic() + CANCEL_SETTLE_TIMEOUT
         while True:
             try:
-                remaining = self.api.list_orders(status="open", symbols=ticker)
+                pos = self.api.get_position(ticker)
             except (ConnectionError, ProtocolError, RequestException, APIError) as e:
-                log.warning("Per-position EOD: list_orders(%s) during settle failed: %s", ticker, e)
+                log.warning("Per-position EOD: get_position(%s) during settle failed: %s", ticker, e)
                 return
-            if not remaining:
+            try:
+                qty = float(pos.qty)
+                qty_available = float(pos.qty_available)
+            except (AttributeError, TypeError, ValueError) as e:
+                log.warning("Per-position EOD: %s qty parse failed: %s", ticker, e)
+                return
+            if qty == qty_available:
                 return
             if time.monotonic() >= deadline:
-                log.warning("Per-position EOD: %d orders still open for %s after %.1fs", len(remaining), ticker, CANCEL_SETTLE_TIMEOUT)
+                log.warning("Per-position EOD: %s qty not fully available after %.1fs (qty=%s, available=%s)", ticker, CANCEL_SETTLE_TIMEOUT, qty, qty_available)
                 return
             self._sleep(CANCEL_SETTLE_INTERVAL)
 
